@@ -16,24 +16,65 @@ body {
 }
 
 button,
-input,
-select {
+input {
   font: inherit;
 }
 
 .app-shell {
-  width: min(100% - 2rem, 960px);
-  margin: 0 auto;
-  padding: 3rem 0;
+  width: 100%;
+  margin: 0;
+  padding: 0;
 }
 
-header {
-  margin-bottom: 2rem;
+.globe-section {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #000;
+}
+
+.globe-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.globe-overlay {
+  position: relative;
+  z-index: 1;
+  width: min(100% - 2.5rem, 940px);
+  margin: 0 auto;
+  padding-top: 1.75rem;
+  pointer-events: none;
+}
+
+.globe-overlay input,
+.globe-overlay button {
+  pointer-events: auto;
+}
+
+.globe-place-card-wrapper {
+  position: absolute;
+  z-index: 2;
+  width: min(280px, calc(100% - 2rem));
+  transform: translateZ(0);
+}
+
+.globe-place-card {
+  margin: 0;
+}
+
+.globe-place-card .place-card {
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+
+.globe-header {
+  margin-bottom: 1.25rem;
 }
 
 .eyebrow {
   margin: 0;
-  color: #53705d;
+  color: #b7c7bd;
   font-size: 0.85rem;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -42,6 +83,7 @@ header {
 
 h1 {
   margin: 0.25rem 0 0;
+  color: #fff;
   font-size: clamp(2.5rem, 8vw, 4.5rem);
   line-height: 1;
 }
@@ -70,8 +112,7 @@ label span {
   font-weight: 400;
 }
 
-input,
-select {
+input {
   width: 100%;
   padding: 0.75rem 0.85rem;
   color: inherit;
@@ -95,19 +136,11 @@ button:disabled {
   opacity: 0.7;
 }
 
-.map-container {
-  display: grid;
-  min-height: 360px;
-  margin-top: 1.5rem;
-  place-items: center;
-  color: #6a776f;
-  background: #e3e9e2;
-  border: 1px solid #ced8cf;
-  border-radius: 16px;
-}
-
 .results {
+  width: min(100% - 2rem, 1120px);
   margin-top: 2rem;
+  margin-right: auto;
+  margin-left: auto;
 }
 
 .results h2 {
@@ -122,6 +155,14 @@ button:disabled {
   color: #a12626;
 }
 
+.relevance-notice {
+  padding: 0.8rem 1rem;
+  color: #69572c;
+  background: #fff7df;
+  border: 1px solid #ebd89d;
+  border-radius: 8px;
+}
+
 .result-list {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -133,6 +174,16 @@ button:disabled {
   background: white;
   border: 1px solid #dde4dd;
   border-radius: 12px;
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.place-card:hover,
+.place-card:focus-visible {
+  border-color: #9fb9a8;
+  box-shadow: 0 8px 20px rgba(23, 32, 27, 0.1);
+  outline: none;
+  transform: translateY(-1px);
 }
 
 .place-card h3,
@@ -140,13 +191,101 @@ button:disabled {
   margin-top: 0;
 }
 
-.place-card small {
+.maps-link {
+  display: inline-block;
+  margin: 0.65rem 0 0 0.2rem;
+  color: #176b45;
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.maps-link:hover {
+  color: #0d4d30;
+}
+
+.evidence-hint {
+  display: block;
+  margin-top: 0.8rem;
   color: #718078;
+  font-size: 0.78rem;
+}
+
+.place-card-stack {
+  position: relative;
+}
+
+.source-cards {
+  position: absolute;
+  z-index: 3;
+  top: 0.5rem;
+  left: calc(100% + 0.75rem);
+  display: grid;
+  gap: 0.5rem;
+  width: 210px;
+  pointer-events: none;
+}
+
+.source-card {
+  padding: 0.8rem;
+  background: #edf1ed;
+  border: 1px solid #cfd8d0;
+  border-radius: 10px;
+  box-shadow: 0 8px 20px rgba(23, 32, 27, 0.12);
+  opacity: 0;
+  transform: translateX(-1.25rem) scale(0.96);
+  transition: opacity 220ms ease, transform 280ms ease;
+  transition-delay: calc(var(--source-index) * 55ms);
+}
+
+.source-cards.is-expanded {
+  pointer-events: auto;
+}
+
+.source-cards.is-expanded .source-card {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+}
+
+.source-card h4 {
+  margin: 0 0 0.45rem;
+  font-size: 0.82rem;
+  line-height: 1.3;
+}
+
+.source-card a {
+  color: #3e614b;
+  font-size: 0.78rem;
+  font-weight: 700;
 }
 
 @media (max-width: 700px) {
+  .globe-overlay {
+    width: min(100% - 2rem, 540px);
+    padding-top: 1.25rem;
+  }
+
   .search-form,
   .result-list {
     grid-template-columns: 1fr;
+  }
+
+  .results {
+    width: min(100% - 2rem, 540px);
+  }
+
+  .source-cards {
+    top: calc(100% + 0.5rem);
+    left: 0;
+    width: min(280px, 100%);
+  }
+
+  .source-card {
+    transform: translateY(-0.75rem) scale(0.96);
+  }
+
+  .source-cards.is-expanded .source-card {
+    transform: translateY(0) scale(1);
   }
 }
