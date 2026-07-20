@@ -155,6 +155,14 @@ button:disabled {
   color: #a12626;
 }
 
+.correction-notice {
+  padding: 0.8rem 1rem;
+  color: #315647;
+  background: #eaf4ed;
+  border: 1px solid #bcd8c3;
+  border-radius: 8px;
+}
+
 .relevance-notice {
   padding: 0.8rem 1rem;
   color: #69572c;
@@ -167,6 +175,47 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1rem;
+}
+
+.show-more-bar {
+  position: fixed;
+  z-index: 10;
+  right: 1rem;
+  bottom: 1rem;
+  left: 1rem;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.show-more-button {
+  position: relative;
+  width: min(100%, 360px);
+  overflow: hidden;
+  pointer-events: auto;
+  box-shadow: 0 10px 28px rgba(23, 32, 27, 0.24);
+}
+
+.show-more-button.is-loading {
+  color: #dceee4;
+  background: #245b42;
+}
+
+.show-more-progress {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  background: #9cf0c4;
+  transform: translateX(-100%);
+  animation: show-more-progress 350ms ease-out forwards;
+}
+
+@keyframes show-more-progress {
+  to {
+    transform: translateX(0);
+  }
 }
 
 .place-card {

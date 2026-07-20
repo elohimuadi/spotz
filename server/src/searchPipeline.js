@@ -3,6 +3,9 @@ import OpenAI from 'openai';
 const OPENAI_MODEL = 'gpt-5.6-terra';
 const SERPER_SEARCH_URL = 'https://google.serper.dev/search';
 const GOOGLE_PLACES_SEARCH_URL = 'https://places.googleapis.com/v1/places:searchText';
+const GOOGLE_GEOCODING_URL = 'https://maps.googleapis.com/maps/api/geocode/json';
+const locationPreviewCache = new Map();
+const locationTypes = new Set(['locality', 'postal_town', 'administrative_area_level_1', 'country']);
 
 const discoverySchema = {
   type: 'object',
@@ -16,6 +19,17 @@ const discoverySchema = {
     },
   },
   required: ['language', 'searchPhrases'],
+  additionalProperties: false,
+};
+
+const interpretationSchema = {
+  type: 'object',
+  properties: {
+    destination: { type: 'string' },
+    category: { type: 'string' },
+    corrected: { type: 'boolean' },
+  },
+  required: ['destination', 'category', 'corrected'],
   additionalProperties: false,
 };
 
@@ -77,6 +91,55 @@ function getOpenAIClient() {
   return new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 }
 
+export async function previewLocation(destination) {
+  const query = destination.trim();
+  if (query.length < 3) return null;
+
+  if (!process.env.GOOGLE_MAPS_API_KEY) {
+    throw new PipelineError('configuration', 'Server is missing GOOGLE_MAPS_API_KEY.');
+  }
+
+  const cacheKey = query.toLocaleLowerCase();
+  const cachedPreview = locationPreviewCache.get(cacheKey);
+  if (cachedPreview && cachedPreview.expiresAt > Date.now()) {
+    return cachedPreview.location;
+  }
+
+  const url = new URL(GOOGLE_GEOCODING_URL);
+  url.searchParams.set('address', query);
+  url.searchParams.set('key', process.env.GOOGLE_MAPS_API_KEY);
+
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Google Geocoding returned ${response.status}.`);
+  }
+
+  const data = await response.json();
+  if (data.status === 'ZERO_RESULTS') return null;
+  if (data.status !== 'OK') {
+    throw new Error(`Google Geocoding returned ${data.status}: ${data.error_message || 'Unknown error'}`);
+  }
+
+  const match = data.results?.[0];
+  const isLocationMatch = match?.types?.some((type) => locationTypes.has(type));
+  if (match?.partial_match || !isLocationMatch || !match?.geometry?.location) {
+    return null;
+  }
+
+  const location = {
+    lat: match.geometry.location.lat,
+    lng: match.geometry.location.lng,
+    label: match.formatted_address,
+  };
+
+  locationPreviewCache.set(cacheKey, {
+    location,
+    expiresAt: Date.now() + 5 * 60 * 1000,
+  });
+  console.log('[location-preview]', { query, location });
+  return location;
+}
+
 async function createStructuredResponse({ name, schema, instructions, input }) {
   const response = await getOpenAIClient().responses.create({
     model: OPENAI_MODEL,
@@ -99,6 +162,29 @@ async function createStructuredResponse({ name, schema, instructions, input }) {
   return JSON.parse(response.output_text);
 }
 
+async function interpretSearchInput(destination, category) {
+  try {
+    // Normalize typos and intent before generating local-language discovery queries.
+    const interpretation = await createStructuredResponse({
+      name: 'search_intent_interpretation',
+      schema: interpretationSchema,
+      instructions: [
+        'You interpret a local-place discovery query written in any language, script, or mix of languages.',
+        'Resolve likely typos, transliterations, shorthand, and unconventional phrasing into the user’s intended destination and category.',
+        'Preserve the intended language and script where useful for local search; do not translate merely for style.',
+        'Set corrected to true only when you made a meaningful correction or clarification to likely intent. Keep it false when the input is already clear.',
+        'Return an empty category string when the user did not provide a category.',
+      ].join(' '),
+      input: `Destination input: ${destination}\nCategory input: ${category}`,
+    });
+
+    console.log('[interpretation]', interpretation);
+    return interpretation;
+  } catch (error) {
+    throw new PipelineError('interpretation', 'Could not interpret the search request.', error);
+  }
+}
+
 async function discoverSearchStrategy(destination, category) {
   try {
     // Ask for locally natural queries, not English translations of tourist-site searches.
@@ -107,8 +193,10 @@ async function discoverSearchStrategy(destination, category) {
       schema: discoverySchema,
       instructions: [
         'You are a local recommendation research strategist.',
+        'The destination and category may have been supplied in any language or script; use their meaning rather than assuming English input.',
         'Identify the primary language locals use when searching for recommendations at the destination.',
         'Consider 2-3 platforms or site types locals actually use, such as local review sites, forums, blogs, or social platforms. Avoid tourist-focused sites.',
+        'Treat hyperlocal venues such as night markets, small stalls, neighborhood vendors, and lesser-known spots as valid targets, not only well-documented established businesses.',
         'Return 2-3 realistic search queries in that local language that a resident would type, tailored to those local sources where useful. Make the queries useful for finding specific named places.',
       ].join(' '),
       input: `Destination: ${destination}\nUser's free-text category request: ${category || 'general local recommendations'}`,
@@ -220,7 +308,7 @@ async function geocodePlace(place, destination) {
     headers: {
       'Content-Type': 'application/json',
       'X-Goog-Api-Key': process.env.GOOGLE_MAPS_API_KEY,
-      'X-Goog-FieldMask': 'places.location,places.googleMapsUri',
+      'X-Goog-FieldMask': 'places.location,places.googleMapsUri,places.businessStatus',
     },
     body: JSON.stringify({
       textQuery: `${place.name}, ${destination}`,
@@ -240,11 +328,17 @@ async function geocodePlace(place, destination) {
     throw new Error('No Google Places match with a location was found.');
   }
 
+  if (match.businessStatus === 'CLOSED_PERMANENTLY') {
+    console.warn(`[geocode] Excluding "${place.name}": permanently closed.`);
+    return null;
+  }
+
   return {
     ...place,
     lat: match.location.latitude,
     lng: match.location.longitude,
     googleMapsUrl: match.googleMapsUri,
+    ...(match.businessStatus === 'CLOSED_TEMPORARILY' ? { temporarilyClosed: true } : {}),
   };
 }
 
@@ -255,7 +349,7 @@ async function geocodePlaces(places, destination) {
 
   const geocodedPlaces = settledPlaces.flatMap((result, index) => {
     if (result.status === 'fulfilled') {
-      return [result.value];
+      return result.value ? [result.value] : [];
     }
 
     console.warn(`[geocode] Skipping "${places[index].name}":`, result.reason.message);
@@ -269,19 +363,24 @@ async function geocodePlaces(places, destination) {
 export async function searchPlaces({ destination, category }) {
   requireEnvironment();
 
-  const discovery = await discoverSearchStrategy(destination, category);
+  const interpretation = await interpretSearchInput(destination, category);
+  const discovery = await discoverSearchStrategy(
+    interpretation.destination,
+    interpretation.category,
+  );
   const searchResults = await searchSerper(discovery.searchPhrases);
   const extraction = await extractPlaces(
-    destination,
-    category,
+    interpretation.destination,
+    interpretation.category,
     discovery.language,
     searchResults,
   );
-  const places = await geocodePlaces(extraction.places, destination);
+  const places = await geocodePlaces(extraction.places, interpretation.destination);
 
   return {
     places,
     directMatch: extraction.directMatch,
     relevanceNote: extraction.relevanceNote,
+    interpretation,
   };
 }

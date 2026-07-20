@@ -1,13 +1,30 @@
 import 'dotenv/config';
 import cors from 'cors';
 import express from 'express';
-import { PipelineError, searchPlaces } from './searchPipeline.js';
+import { PipelineError, previewLocation, searchPlaces } from './searchPipeline.js';
 
 const app = express();
 const port = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
+
+app.post('/api/location-preview', async (req, res) => {
+  const { destination } = req.body;
+
+  if (typeof destination !== 'string') {
+    return res.status(400).json({ error: 'Destination must be text.' });
+  }
+
+  try {
+    const location = await previewLocation(destination);
+    return res.json({ location });
+  } catch (error) {
+    console.error('[location-preview error]', error.cause || error);
+    const status = error instanceof PipelineError && error.step === 'configuration' ? 500 : 502;
+    return res.status(status).json({ error: 'Could not preview this destination.' });
+  }
+});
 
 app.post('/api/search', async (req, res) => {
   const { destination, category } = req.body;

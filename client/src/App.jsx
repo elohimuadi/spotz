@@ -4,6 +4,7 @@ import { feature } from 'topojson-client';
 import countriesTopology from 'world-atlas/countries-110m.json';
 
 const countries = feature(countriesTopology, countriesTopology.objects.countries).features;
+const RESULTS_BATCH_SIZE = 6;
 
 function placeKey(place) {
   return `${place.name}-${place.lat}-${place.lng}`;
@@ -95,10 +96,12 @@ function PlaceCard({ place, className = '', isExpanded, onToggle }) {
 export default function App() {
   const globeRef = useRef();
   const globeContainerRef = useRef();
+  const previewLocationRef = useRef(null);
   const [destination, setDestination] = useState('');
   const [category, setCategory] = useState('');
   const [places, setPlaces] = useState([]);
   const [relevanceNotice, setRelevanceNotice] = useState('');
+  const [correctionNotice, setCorrectionNotice] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [globeReady, setGlobeReady] = useState(false);
@@ -106,7 +109,13 @@ export default function App() {
   const [selectedPlace, setSelectedPlace] = useState(null);
   const [selectedCardPosition, setSelectedCardPosition] = useState({ x: 16, y: 160 });
   const [expandedPlaceKey, setExpandedPlaceKey] = useState(null);
-  const markerPlaces = useMemo(() => layoutMarkers(places), [places]);
+  const [visibleCount, setVisibleCount] = useState(RESULTS_BATCH_SIZE);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const totalCount = places.length;
+  const displayedCount = Math.min(visibleCount, totalCount);
+  const visiblePlaces = places.slice(0, displayedCount);
+  const hasMoreResults = displayedCount < totalCount;
+  const markerPlaces = useMemo(() => layoutMarkers(visiblePlaces), [visiblePlaces]);
 
   useEffect(() => {
     const container = globeContainerRef.current;
@@ -130,11 +139,54 @@ export default function App() {
     const controls = globeRef.current?.controls();
     if (controls) controls.autoRotate = false;
 
+    const previewLocation = previewLocationRef.current;
+    const previewIsNearby = previewLocation
+      && Math.hypot(previewLocation.lat - focusPlace.lat, previewLocation.lng - focusPlace.lng) < 0.3;
+
     globeRef.current?.pointOfView(
       { lat: focusPlace.lat, lng: focusPlace.lng, altitude: 0.08 },
-      1600,
+      previewIsNearby ? 500 : 1600,
     );
   }, [globeReady, places]);
+
+  useEffect(() => {
+    const query = destination.trim();
+    previewLocationRef.current = null;
+    if (!globeReady || query.length < 3) return undefined;
+
+    const controller = new AbortController();
+    const debounceTimer = setTimeout(async () => {
+      try {
+        const response = await fetch('/api/location-preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ destination: query }),
+          signal: controller.signal,
+        });
+
+        if (!response.ok) return;
+        const { location } = await response.json();
+        if (!location) return;
+
+        previewLocationRef.current = location;
+        const controls = globeRef.current?.controls();
+        if (controls) controls.autoRotate = false;
+        globeRef.current?.pointOfView(
+          { lat: location.lat, lng: location.lng, altitude: 0.08 },
+          1200,
+        );
+      } catch (previewError) {
+        if (previewError.name !== 'AbortError') {
+          console.warn('Destination preview unavailable.', previewError);
+        }
+      }
+    }, 450);
+
+    return () => {
+      clearTimeout(debounceTimer);
+      controller.abort();
+    };
+  }, [destination, globeReady]);
 
   function handleGlobeReady() {
     const controls = globeRef.current?.controls();
@@ -186,6 +238,7 @@ export default function App() {
     setIsLoading(true);
     setError('');
     setRelevanceNotice('');
+    setCorrectionNotice(null);
     closeSelectedPlace();
 
     try {
@@ -202,14 +255,28 @@ export default function App() {
 
       const searchResult = await response.json();
       setPlaces(searchResult.places || []);
+      setVisibleCount(RESULTS_BATCH_SIZE);
+      setIsLoadingMore(false);
       setRelevanceNotice(searchResult.relevanceNote || '');
+      setCorrectionNotice(searchResult.interpretation?.corrected ? searchResult.interpretation : null);
     } catch (requestError) {
       setError(requestError.message);
       setPlaces([]);
+      setVisibleCount(RESULTS_BATCH_SIZE);
+      setIsLoadingMore(false);
       setRelevanceNotice('');
+      setCorrectionNotice(null);
     } finally {
       setIsLoading(false);
     }
+  }
+
+  async function showMoreResults() {
+    setIsLoadingMore(true);
+    // Results are already loaded; keep a short transition so the batch reveal is visible.
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    setVisibleCount((currentCount) => Math.min(currentCount + RESULTS_BATCH_SIZE, totalCount));
+    setIsLoadingMore(false);
   }
 
   return (
@@ -232,7 +299,7 @@ export default function App() {
               polygonSideColor={() => 'rgba(0, 0, 0, 0)'}
               polygonStrokeColor={() => 'rgba(225, 230, 235, 0.8)'}
               polygonsTransitionDuration={0}
-              ringsData={places.slice(0, 1)}
+              ringsData={visiblePlaces.slice(0, 1)}
               ringLat="lat"
               ringLng="lng"
               ringAltitude={0.01}
@@ -307,10 +374,16 @@ export default function App() {
       <section className="results" aria-labelledby="results-heading">
         <h2 id="results-heading">Results</h2>
         {error && <p className="error" role="alert">{error}</p>}
+        {correctionNotice && (
+          <p className="correction-notice">
+            Showing results for: {correctionNotice.destination}
+            {correctionNotice.category && ` · ${correctionNotice.category}`}
+          </p>
+        )}
         {relevanceNotice && <p className="relevance-notice">{relevanceNotice}</p>}
         {!error && places.length === 0 && <p className="empty-state">Search for a destination to discover some spotz.</p>}
         <div className="result-list">
-          {places.map((place) => (
+          {visiblePlaces.map((place) => (
             <PlaceCard
               place={place}
               key={placeKey(place)}
@@ -320,6 +393,19 @@ export default function App() {
           ))}
         </div>
       </section>
+      {!isLoading && !error && hasMoreResults && (
+        <div className="show-more-bar">
+          <button
+            className={`show-more-button ${isLoadingMore ? 'is-loading' : ''}`}
+            type="button"
+            onClick={showMoreResults}
+            disabled={isLoadingMore}
+          >
+            {isLoadingMore ? 'Loading more results…' : 'Show more'}
+            {isLoadingMore && <span className="show-more-progress" aria-hidden="true" />}
+          </button>
+        </div>
+      )}
     </main>
   );
 }
