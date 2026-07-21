@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Globe from 'react-globe.gl';
 import * as THREE from 'three';
 import { feature } from 'topojson-client';
@@ -9,34 +9,6 @@ const RESULTS_BATCH_SIZE = 6;
 
 function placeKey(place) {
   return `${place.name}-${place.lat}-${place.lng}`;
-}
-
-function layoutMarkers(places) {
-  const closeDistance = 0.12;
-
-  return places.map((place) => {
-    const cluster = places
-      .filter((candidate) => (
-        Math.hypot(candidate.lat - place.lat, candidate.lng - place.lng) < closeDistance
-      ))
-      .sort((left, right) => placeKey(left).localeCompare(placeKey(right)));
-
-    if (cluster.length === 1) {
-      return { ...place, markerLat: place.lat, markerLng: place.lng };
-    }
-
-    const position = cluster.findIndex((candidate) => placeKey(candidate) === placeKey(place));
-    const angle = (2 * Math.PI * position) / cluster.length;
-    const radius = 0.2 + Math.floor(position / 6) * 0.08;
-    const longitudeScale = Math.max(Math.cos((place.lat * Math.PI) / 180), 0.2);
-
-    return {
-      ...place,
-      // Fan close points around their true location without changing the search result itself.
-      markerLat: place.lat + Math.sin(angle) * radius,
-      markerLng: place.lng + (Math.cos(angle) * radius) / longitudeScale,
-    };
-  });
 }
 
 function PlaceCard({ place, className = '', isExpanded, onToggle }) {
@@ -99,6 +71,8 @@ export default function App() {
   const globeContainerRef = useRef();
   const previewLocationRef = useRef(null);
   const markerVisualsRef = useRef(new Set());
+  const selectedPlaceKeyRef = useRef(null);
+  const resultRowRefs = useRef(new Map());
   const [destination, setDestination] = useState('');
   const [category, setCategory] = useState('');
   const [places, setPlaces] = useState([]);
@@ -117,7 +91,11 @@ export default function App() {
   const displayedCount = Math.min(visibleCount, totalCount);
   const visiblePlaces = places.slice(0, displayedCount);
   const hasMoreResults = displayedCount < totalCount;
-  const markerPlaces = useMemo(() => layoutMarkers(visiblePlaces), [visiblePlaces]);
+  const markerPlaces = visiblePlaces;
+
+  useEffect(() => {
+    selectedPlaceKeyRef.current = selectedPlace ? placeKey(selectedPlace) : null;
+  }, [selectedPlace]);
 
   useEffect(() => {
     const container = globeContainerRef.current;
@@ -138,11 +116,12 @@ export default function App() {
     let animationFrame;
 
     const animateMarkers = (time) => {
-      markerVisualsRef.current.forEach(({ group, coreMaterial, glowMaterial, phase }) => {
+      markerVisualsRef.current.forEach(({ group, coreMaterial, glowMaterial, phase, key }) => {
         const pulse = (Math.sin((time / 900) + phase) + 1) / 2;
-        group.scale.setScalar(0.88 + pulse * 0.22);
-        coreMaterial.opacity = 0.78 + pulse * 0.22;
-        glowMaterial.opacity = 0.08 + pulse * 0.16;
+        const isSelected = key === selectedPlaceKeyRef.current;
+        group.scale.setScalar((isSelected ? 1.35 : 0.88) + pulse * (isSelected ? 0.28 : 0.22));
+        coreMaterial.opacity = isSelected ? 1 : 0.78 + pulse * 0.22;
+        glowMaterial.opacity = isSelected ? 0.42 : 0.08 + pulse * 0.16;
       });
       animationFrame = requestAnimationFrame(animateMarkers);
     };
@@ -172,7 +151,7 @@ export default function App() {
     const phase = Array.from(placeKey(place)).reduce((sum, character) => sum + character.charCodeAt(0), 0) % 7;
 
     group.add(glow, core);
-    markerVisualsRef.current.add({ group, coreMaterial, glowMaterial, phase });
+    markerVisualsRef.current.add({ group, coreMaterial, glowMaterial, phase, key: placeKey(place) });
     return group;
   }
 
@@ -257,6 +236,37 @@ export default function App() {
     setExpandedPlaceKey((currentKey) => (currentKey === key ? null : key));
   }
 
+  function scrollToResultRow(place) {
+    requestAnimationFrame(() => {
+      resultRowRefs.current.get(placeKey(place))?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+      });
+    });
+  }
+
+  function openPlaceFromList(place) {
+    if (selectedPlace && placeKey(selectedPlace) === placeKey(place)) {
+      closeSelectedPlace();
+      return;
+    }
+
+    const bounds = globeContainerRef.current?.getBoundingClientRect();
+    if (bounds) {
+      setSelectedCardPosition({
+        x: Math.min(Math.max(16, bounds.width * 0.42), Math.max(16, bounds.width - 300)),
+        y: Math.max(120, bounds.height * 0.28),
+      });
+    }
+
+    const controls = globeRef.current?.controls();
+    if (controls) controls.autoRotate = false;
+    globeRef.current?.pointOfView({ lat: place.lat, lng: place.lng, altitude: 0.065 }, 700);
+    setSelectedPlace(place);
+    setExpandedPlaceKey(null);
+    scrollToResultRow(place);
+  }
+
   function handleMarkerClick(place, event) {
     if (selectedPlace && placeKey(selectedPlace) === placeKey(place)) {
       closeSelectedPlace();
@@ -275,6 +285,7 @@ export default function App() {
 
     setSelectedPlace(place);
     setExpandedPlaceKey(null);
+    scrollToResultRow(place);
   }
 
   async function handleSubmit(event) {
@@ -343,19 +354,18 @@ export default function App() {
               polygonSideColor={() => 'rgba(0, 0, 0, 0)'}
               polygonStrokeColor={() => 'rgba(225, 230, 235, 0.8)'}
               polygonsTransitionDuration={0}
-              // The animated rings make the clickable point markers read as quiet stars.
-              // Marker positions include the existing cluster fan-out offsets.
+              // Markers sit at their true coordinates; the list handles dense clusters.
               ringsData={[...visiblePlaces.slice(0, 1), ...markerPlaces]}
-              ringLat={(place) => place.markerLat ?? place.lat}
-              ringLng={(place) => place.markerLng ?? place.lng}
+              ringLat="lat"
+              ringLng="lng"
               ringAltitude={0.006}
               ringMaxRadius={0.003}
               ringPropagationSpeed={0.06}
               ringRepeatPeriod={1800}
               ringColor={() => ['rgba(245, 245, 245, 0.48)', 'rgba(245, 245, 245, 0)']}
               objectsData={markerPlaces}
-              objectLat="markerLat"
-              objectLng="markerLng"
+              objectLat="lat"
+              objectLng="lng"
               objectAltitude={0.012}
               objectThreeObject={createStarMarker}
               onObjectClick={handleMarkerClick}
@@ -396,6 +406,38 @@ export default function App() {
         </div>
 
         <h1 className="wordmark">Spotz</h1>
+
+        {visiblePlaces.length > 0 && (
+          <aside className="results-panel" aria-label="Search results">
+            <p className="results-panel-label">Places · {displayedCount} of {totalCount}</p>
+            <div className="results-panel-list">
+              {visiblePlaces.map((place) => {
+                const isSelected = selectedPlace && placeKey(selectedPlace) === placeKey(place);
+
+                return (
+                  <button
+                    className={`result-row ${isSelected ? 'is-selected' : ''}`}
+                    key={placeKey(place)}
+                    type="button"
+                    aria-pressed={isSelected}
+                    ref={(element) => {
+                      const key = placeKey(place);
+                      if (element) resultRowRefs.current.set(key, element);
+                      else resultRowRefs.current.delete(key);
+                    }}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openPlaceFromList(place);
+                    }}
+                  >
+                    <strong>{place.name}</strong>
+                    <span>{place.blurb}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+        )}
 
         {selectedPlace && (
           <div
