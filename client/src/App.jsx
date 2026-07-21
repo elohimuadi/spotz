@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Globe from 'react-globe.gl';
+import * as THREE from 'three';
 import { feature } from 'topojson-client';
 import countriesTopology from 'world-atlas/countries-110m.json';
 
@@ -97,6 +98,7 @@ export default function App() {
   const globeRef = useRef();
   const globeContainerRef = useRef();
   const previewLocationRef = useRef(null);
+  const markerVisualsRef = useRef(new Set());
   const [destination, setDestination] = useState('');
   const [category, setCategory] = useState('');
   const [places, setPlaces] = useState([]);
@@ -131,6 +133,48 @@ export default function App() {
 
     return () => resizeObserver.disconnect();
   }, []);
+
+  useEffect(() => {
+    let animationFrame;
+
+    const animateMarkers = (time) => {
+      markerVisualsRef.current.forEach(({ group, coreMaterial, glowMaterial, phase }) => {
+        const pulse = (Math.sin((time / 900) + phase) + 1) / 2;
+        group.scale.setScalar(0.88 + pulse * 0.22);
+        coreMaterial.opacity = 0.78 + pulse * 0.22;
+        glowMaterial.opacity = 0.08 + pulse * 0.16;
+      });
+      animationFrame = requestAnimationFrame(animateMarkers);
+    };
+
+    animationFrame = requestAnimationFrame(animateMarkers);
+    return () => cancelAnimationFrame(animationFrame);
+  }, []);
+
+  function createStarMarker(place) {
+    // Custom objects replace Globe's default column-like point mesh entirely.
+    const group = new THREE.Group();
+    const coreMaterial = new THREE.MeshBasicMaterial({
+      color: '#ffffff',
+      transparent: true,
+      opacity: 1,
+      toneMapped: false,
+    });
+    const glowMaterial = new THREE.MeshBasicMaterial({
+      color: '#e8e8e8',
+      transparent: true,
+      opacity: 0.18,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const core = new THREE.Mesh(new THREE.SphereGeometry(0.04, 16, 16), coreMaterial);
+    const glow = new THREE.Mesh(new THREE.SphereGeometry(0.045, 16, 16), glowMaterial);
+    const phase = Array.from(placeKey(place)).reduce((sum, character) => sum + character.charCodeAt(0), 0) % 7;
+
+    group.add(glow, core);
+    markerVisualsRef.current.add({ group, coreMaterial, glowMaterial, phase });
+    return group;
+  }
 
   useEffect(() => {
     const focusPlace = places[0];
@@ -305,18 +349,16 @@ export default function App() {
               ringLat={(place) => place.markerLat ?? place.lat}
               ringLng={(place) => place.markerLng ?? place.lng}
               ringAltitude={0.006}
-              ringMaxRadius={0.08}
+              ringMaxRadius={0.003}
               ringPropagationSpeed={0.06}
               ringRepeatPeriod={1800}
               ringColor={() => ['rgba(245, 245, 245, 0.48)', 'rgba(245, 245, 245, 0)']}
-              pointsData={markerPlaces}
-              pointLat="markerLat"
-              pointLng="markerLng"
-              pointAltitude={0.004}
-              pointRadius={0.025}
-              pointColor={() => '#f7f7f7'}
-              pointResolution={16}
-              onPointClick={handleMarkerClick}
+              objectsData={markerPlaces}
+              objectLat="markerLat"
+              objectLng="markerLng"
+              objectAltitude={0.012}
+              objectThreeObject={createStarMarker}
+              onObjectClick={handleMarkerClick}
               onGlobeClick={closeSelectedPlace}
               onPolygonClick={closeSelectedPlace}
               onGlobeReady={handleGlobeReady}
