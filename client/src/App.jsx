@@ -299,21 +299,23 @@ export default function App() {
               polygonSideColor={() => 'rgba(0, 0, 0, 0)'}
               polygonStrokeColor={() => 'rgba(225, 230, 235, 0.8)'}
               polygonsTransitionDuration={0}
-              ringsData={visiblePlaces.slice(0, 1)}
-              ringLat="lat"
-              ringLng="lng"
-              ringAltitude={0.01}
-              ringMaxRadius={0.35}
-              ringPropagationSpeed={0.7}
-              ringRepeatPeriod={900}
-              ringColor={() => ['rgba(230, 235, 240, 0.7)', 'rgba(230, 235, 240, 0)']}
+              // The animated rings make the clickable point markers read as quiet stars.
+              // Marker positions include the existing cluster fan-out offsets.
+              ringsData={[...visiblePlaces.slice(0, 1), ...markerPlaces]}
+              ringLat={(place) => place.markerLat ?? place.lat}
+              ringLng={(place) => place.markerLng ?? place.lng}
+              ringAltitude={0.006}
+              ringMaxRadius={0.08}
+              ringPropagationSpeed={0.06}
+              ringRepeatPeriod={1800}
+              ringColor={() => ['rgba(245, 245, 245, 0.48)', 'rgba(245, 245, 245, 0)']}
               pointsData={markerPlaces}
               pointLat="markerLat"
               pointLng="markerLng"
-              pointAltitude={0.02}
-              pointRadius={0.06}
-              pointColor={() => '#77f1ff'}
-              pointResolution={12}
+              pointAltitude={0.004}
+              pointRadius={0.025}
+              pointColor={() => '#f7f7f7'}
+              pointResolution={16}
               onPointClick={handleMarkerClick}
               onGlobeClick={closeSelectedPlace}
               onPolygonClick={closeSelectedPlace}
@@ -323,11 +325,6 @@ export default function App() {
         </div>
 
         <div className="globe-overlay">
-          <header className="globe-header">
-            <p className="eyebrow">Find your next favorite place</p>
-            <h1>Spotz</h1>
-          </header>
-
           <form className="search-form" onSubmit={handleSubmit}>
             <label>
               Destination
@@ -355,6 +352,8 @@ export default function App() {
             </button>
           </form>
         </div>
+
+        <h1 className="wordmark">Spotz</h1>
 
         {selectedPlace && (
           <div

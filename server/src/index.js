@@ -1,15 +1,48 @@
 import 'dotenv/config';
 import cors from 'cors';
 import express from 'express';
+import { rateLimit } from 'express-rate-limit';
 import { PipelineError, previewLocation, searchPlaces } from './searchPipeline.js';
 
 const app = express();
 const port = process.env.PORT || 3001;
+const developmentOrigins = ['http://127.0.0.1:5173', 'http://localhost:5173'];
+const configuredOrigins = (process.env.CORS_ORIGIN || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+const allowedOrigins = configuredOrigins.length > 0
+  ? configuredOrigins
+  : process.env.NODE_ENV === 'production'
+    ? []
+    : developmentOrigins;
+const budgetRequestLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: 'draft-8',
+  legacyHeaders: false,
+  message: {
+    error: 'Too many searches from this connection. Please wait 15 minutes and try again.',
+  },
+});
 
-app.use(cors());
+app.use(cors({
+  // Production must explicitly set CORS_ORIGIN to the deployed client origin.
+  origin(origin, callback) {
+    if (!origin || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    // Returning false omits CORS headers without turning a blocked browser
+    // preflight into an application-level 500 response.
+    return callback(null, false);
+  },
+  methods: ['POST'],
+  allowedHeaders: ['Content-Type'],
+}));
 app.use(express.json());
 
-app.post('/api/location-preview', async (req, res) => {
+app.post('/api/location-preview', budgetRequestLimiter, async (req, res) => {
   const { destination } = req.body;
 
   if (typeof destination !== 'string') {
@@ -26,7 +59,7 @@ app.post('/api/location-preview', async (req, res) => {
   }
 });
 
-app.post('/api/search', async (req, res) => {
+app.post('/api/search', budgetRequestLimiter, async (req, res) => {
   const { destination, category } = req.body;
 
   if (typeof destination !== 'string' || !destination.trim()) {
